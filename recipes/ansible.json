@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "ansible",
+  "name": "Ansible",
+  "category": "Automation",
+  "description": "Install Ansible using the distribution standard package repository.",
+  "official_docs": "https://docs.ansible.com/ansible/latest/installation_guide/installation_distros.html#installing-ansible-on-ubuntu",
+  "platforms": {
+    "family": "debian",
+    "supported_ids": [
+      "ubuntu",
+      "debian",
+      "linuxmint"
+    ]
+  },
+  "installer": {
+    "type": "native_apt_package",
+    "prerequisites": [],
+    "refresh_command": [
+      "apt-get",
+      "update"
+    ],
+    "install_packages": [
+      "ansible"
+    ]
+  },
+  "actions": {
+    "configure_only": false,
+    "install_after_configure": false,
+    "post_install_notes": [
+      "Ansible is installed from your distribution standard APT repositories.",
+      "The version provided by your distribution package archive may be older than the newest upstream release.",
+      "To check installed version, run: ansible --version"
+    ]
+  },
+  "security": {
+    "require_https": true,
+    "never_use_apt_key": true,
+    "never_execute_downloaded_scripts": true
+  }
+}
