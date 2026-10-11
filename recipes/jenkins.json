@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "jenkins",
+  "name": "Jenkins",
+  "category": "DevOps",
+  "description": "Jenkins LTS from the official Jenkins Debian repository.",
+  "official_docs": "https://www.jenkins.io/doc/book/installing/linux/",
+  "platforms": {
+    "family": "debian",
+    "supported_ids": [
+      "ubuntu",
+      "debian",
+      "linuxmint"
+    ],
+    "release_channel": "lts"
+  },
+  "installer": {
+    "type": "apt_repository",
+    "repository": {
+      "name": "Jenkins LTS",
+      "uri": "https://pkg.jenkins.io/debian-stable",
+      "suite": "binary/",
+      "components": [],
+      "source_file": "/etc/apt/sources.list.d/jenkins.list",
+      "source_line_template": "deb [signed-by={keyring}] https://pkg.jenkins.io/debian-stable binary/"
+    },
+    "signing_key": {
+      "url": "https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key",
+      "keyring": "/usr/share/keyrings/jenkins-keyring.asc",
+      "format": "ascii-armored",
+      "expected_primary_fingerprint": "5E386EADB55F01504CAE8BCF7198F4B714ABFC68",
+      "fingerprint_source": "https://www.jenkins.io/download/verify/"
+    },
+    "prerequisites": [
+      {
+        "type": "apt_packages",
+        "names": [
+          "ca-certificates",
+          "curl",
+          "fontconfig",
+          "openjdk-21-jre"
+        ]
+      }
+    ],
+    "refresh_command": [
+      "apt-get",
+      "update"
+    ],
+    "install_packages": [
+      "jenkins"
+    ]
+  },
+  "actions": {
+    "configure_only": true,
+    "install_after_configure": true,
+    "service_name": "jenkins",
+    "post_install_notes": [
+      "Jenkins requires a supported Java runtime; this recipe uses OpenJDK 21.",
+      "After installation, Jenkins normally listens on TCP port 8080.",
+      "Do not start or enable services without informing the user."
+    ]
+  },
+  "security": {
+    "require_https": true,
+    "verify_key_fingerprint_before_install": true,
+    "never_use_apt_key": true,
+    "never_execute_downloaded_scripts": true
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "hadoop",
+  "name": "Apache Hadoop",
+  "category": "Big Data",
+  "description": "Download and verify the official Apache Hadoop binary distribution. Hadoop does not publish a standard official APT repository in its installation documentation.",
+  "official_docs": "https://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-common/SingleCluster.html",
+  "official_releases": "https://hadoop.apache.org/releases.html",
+  "platforms": {
+    "family": "debian",
+    "supported_ids": [
+      "ubuntu",
+      "debian"
+    ],
+    "architectures": [
+      "amd64",
+      "arm64"
+    ]
+  },
+  "installer": {
+    "type": "verified_archive",
+    "version_policy": "resolve_from_official_releases_page_then_require_version_confirmation",
+    "latest_release_observed_at_recipe_creation": "3.5.0",
+    "artifact_source": "Apache official release mirrors linked from https://hadoop.apache.org/releases.html",
+    "artifact_name_template": "hadoop-{version}.tar.gz",
+    "signature_name_template": "hadoop-{version}.tar.gz.asc",
+    "checksum_name_template": "hadoop-{version}.tar.gz.sha512",
+    "verification": {
+      "preferred": "gpg_signature",
+      "also_support": "sha512",
+      "keys_page": "https://downloads.apache.org/hadoop/common/KEYS",
+      "instructions": "https://hadoop.apache.org/releases.html",
+      "must_verify_before_extracting": true
+    },
+    "prerequisites": [
+      {
+        "type": "apt_packages",
+        "names": [
+          "openjdk-21-jdk",
+          "curl",
+          "gnupg",
+          "tar"
+        ]
+      }
+    ],
+    "install_location": "/opt",
+    "environment_file": "/etc/profile.d/hadoop.sh",
+    "configuration_policy": "Do not configure HDFS/YARN or start daemons automatically; present the official single-node setup guide after extraction."
+  },
+  "actions": {
+    "configure_only": false,
+    "install_after_download": true,
+    "post_install_notes": [
+      "Hadoop is a framework distribution, not a simple APT repository package.",
+      "The release page must be consulted at runtime; never assume the hard-coded observed version remains latest.",
+      "Verify the downloaded archive signature or checksum before extraction."
+    ]
+  },
+  "security": {
+    "require_https": true,
+    "verify_signature_or_checksum": true,
+    "never_execute_downloaded_scripts": true
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "id": "opennebula",
+  "name": "OpenNebula Community Edition",
+  "category": "Cloud",
+  "description": "Configure the official OpenNebula 7.2 Community Edition APT repository.",
+  "official_docs": "https://docs.opennebula.io/7.2/software/installation_process/frontend_installation/opennebula_repository_configuration_ce/",
+  "platforms": {
+    "family": "debian",
+    "supported_releases": {
+      "ubuntu": [
+        "22.04",
+        "24.04"
+      ],
+      "debian": [
+        "12",
+        "13"
+      ]
+    }
+  },
+  "installer": {
+    "type": "apt_repository",
+    "repository": {
+      "name": "OpenNebula Community Edition",
+      "uri_template": "https://downloads.opennebula.io/repo/7.2/{distribution}/{release}",
+      "suite": "stable",
+      "components": [
+        "opennebula"
+      ],
+      "source_file": "/etc/apt/sources.list.d/opennebula.list",
+      "source_line_template": "deb [signed-by={keyring}] https://downloads.opennebula.io/repo/7.2/{distribution}/{release} stable opennebula",
+      "distribution_map": {
+        "ubuntu": "Ubuntu",
+        "debian": "Debian"
+      }
+    },
+    "signing_key": {
+      "url": "https://downloads.opennebula.io/repo/repo2.key",
+      "keyring": "/etc/apt/keyrings/opennebula.gpg",
+      "format": "openpgp_dearmored",
+      "expected_primary_fingerprint": null,
+      "fingerprint_source": "https://docs.opennebula.io/7.2/software/installation_process/frontend_installation/opennebula_repository_configuration_ce/",
+      "verification_policy": "BLOCK_AUTOMATIC_CONFIGURATION_UNTIL_FINGERPRINT_IS_INDEPENDENTLY_PINNED"
+    },
+    "prerequisites": [
+      {
+        "type": "apt_packages",
+        "names": [
+          "ca-certificates",
+          "gnupg",
+          "wget",
+          "apt-transport-https"
+        ]
+      }
+    ],
+    "refresh_command": [
+      "apt-get",
+      "update"
+    ],
+    "install_packages": [
+      "opennebula",
+      "opennebula-fireedge",
+      "opennebula-gate",
+      "opennebula-flow"
+    ]
+  },
+  "actions": {
+    "configure_only": true,
+    "install_after_configure": true,
+    "post_install_notes": [
+      "This configures the Community Edition repository, not the private Enterprise Edition repository.",
+      "OpenNebula frontend deployment has database and system requirements; adding the repository alone is not a complete deployment."
+    ]
+  },
+  "security": {
+    "require_https": true,
+    "verify_key_fingerprint_before_install": true,
+    "never_use_apt_key": true,
+    "never_execute_downloaded_scripts": true
+  }
+}
