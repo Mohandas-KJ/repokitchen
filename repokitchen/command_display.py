@@ -1,16 +1,135 @@
 """Command Display and Instruction Generator for RepoKitchen.
 
 Produces complete, copy-pasteable shell instructions and step-by-step
-breakdowns from validated recipe metadata for review and manual execution.
+breakdowns from validated recipe metadata for review and manual execution,
+rendered with clean Unicode boxes and terminal styling.
 """
 
 from __future__ import annotations
 
+import os
+import re
+import sys
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from repokitchen.detector import OSInfo, check_compatibility
+
+ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def str_display_width(text: str) -> int:
+    """Compute the visual display width of a string in a monospace terminal.
+
+    Accounts for full-width characters and emojis that occupy two terminal cells.
+    """
+    clean = strip_ansi(text)
+    width = 0
+    for char in clean:
+        if unicodedata.east_asian_width(char) in ("W", "F"):
+            width += 2
+        elif 0x1F300 <= ord(char) <= 0x1FAFF or 0x2600 <= ord(char) <= 0x27BF:
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+class Style:
+    """ANSI terminal styling and color codes."""
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    UNDERLINE = "\033[4m"
+
+    BLACK = "\033[30m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+
+    GRAY = "\033[90m"
+    BRIGHT_RED = "\033[91m"
+    BRIGHT_GREEN = "\033[92m"
+    BRIGHT_YELLOW = "\033[93m"
+    BRIGHT_BLUE = "\033[94m"
+    BRIGHT_MAGENTA = "\033[95m"
+    BRIGHT_CYAN = "\033[96m"
+    BRIGHT_WHITE = "\033[97m"
+
+
+def should_use_color(force_color: Optional[bool] = None) -> bool:
+    """Determine whether ANSI color escape codes should be applied."""
+    if force_color is not None:
+        return force_color
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+def render_box(
+    lines: List[str],
+    title: str = "",
+    min_width: int = 78,
+    border_color: str = Style.CYAN,
+    title_color: str = Style.BOLD + Style.BRIGHT_WHITE,
+    use_color: bool = True,
+    pad_vertical: bool = False,
+) -> str:
+    """Render a block of text lines enclosed in a rounded Unicode box frame.
+
+    Args:
+        lines: Content lines to render inside the box.
+        title: Optional title string embedded in the top border.
+        min_width: Minimum width for the box frame.
+        border_color: ANSI code for the border.
+        title_color: ANSI code for the title.
+        use_color: Whether to include ANSI escape sequences.
+        pad_vertical: Whether to add empty lines at top and bottom inside the box.
+    """
+    bc = border_color if use_color else ""
+    tc = title_color if use_color else ""
+    rst = Style.RESET if use_color else ""
+
+    plain_title = strip_ansi(title)
+    title_w = str_display_width(plain_title) if plain_title else 0
+    content_w = max([str_display_width(l) for l in lines] + [title_w + 6], default=0)
+    w = max(min_width, content_w + 4)
+
+    output = []
+    if plain_title:
+        fill_right = w - title_w - 6
+        top_line = f"{bc}╭── {tc}{title}{rst}{bc} {'─' * max(0, fill_right)}╮{rst}"
+    else:
+        top_line = f"{bc}╭{'─' * (w - 2)}╮{rst}"
+    output.append(top_line)
+
+    if pad_vertical:
+        output.append(f"{bc}│{rst}{' ' * (w - 2)}{bc}│{rst}")
+
+    for line in lines:
+        disp_w = str_display_width(line)
+        pad = " " * max(0, w - 4 - disp_w)
+        output.append(f"{bc}│{rst} {line}{pad} {bc}│{rst}")
+
+    if pad_vertical:
+        output.append(f"{bc}│{rst}{' ' * (w - 2)}{bc}│{rst}")
+
+    bot_line = f"{bc}╰{'─' * (w - 2)}╯{rst}"
+    output.append(bot_line)
+    return "\n".join(output)
 
 
 @dataclass
@@ -348,104 +467,180 @@ def build_installation_plan(
 
 
 def format_copy_paste_script(plan: InstallationPlan) -> str:
-    """Generate a clean, copy-pasteable bash script block containing all commands."""
+    """Generate a clean, copy-pasteable bash script containing only valid commands and concise comments."""
     lines: List[str] = [
         "#!/usr/bin/env bash",
-        f"# ==============================================================================",
         f"# RepoKitchen — Installation Script for {plan.recipe_name}",
-        f"# Method: {plan.method}",
-        f"# Target System: {plan.os_info.pretty_name} [{plan.os_info.architecture}]",
+        f"# Method: {plan.method} | Target: {plan.os_info.pretty_name} [{plan.os_info.architecture}]",
         f"# Official Documentation: {plan.official_docs}",
-        f"# ==============================================================================",
         "set -euo pipefail",
         "",
     ]
 
     if plan.auto_install_blocked_reason:
-        lines.append(f"# NOTE / NOTICE:")
-        lines.append(f"# {plan.auto_install_blocked_reason}")
+        lines.append(f"# Advisory: {plan.auto_install_blocked_reason}")
         lines.append("")
 
     for step in plan.steps:
-        lines.append(f"# --- Step {step.step_num}: {step.title} ---")
-        lines.append(f"# {step.description}")
-        for note in step.notes:
-            lines.append(f"# Note: {note}")
+        note_str = f" ({step.notes[0]})" if step.notes else ""
+        lines.append(f"# Step {step.step_num}: {step.title}{note_str}")
         for cmd in step.commands:
             lines.append(cmd)
         lines.append("")
 
-    lines.append(f"# --- Installation Complete ---")
     if plan.post_install_notes:
+        lines.append("# Post-install Notes:")
         for note in plan.post_install_notes:
-            lines.append(f"# Post-install: {note}")
+            lines.append(f"# - {note}")
 
-    return "\n".join(lines)
+    return "\n".join(lines).strip()
 
 
-def format_full_view(plan: InstallationPlan) -> str:
-    """Format human-readable instructions with step breakdown and copy-pasteable code block."""
-    sep = "=" * 76
-    sub_sep = "-" * 76
-    output: List[str] = [
-        sep,
-        f"🍳 RepoKitchen — Installation Instructions: {plan.recipe_name}",
-        sep,
-        f"Category:        {plan.category}",
-        f"Method:          {plan.method}",
-        f"Official Docs:   {plan.official_docs}",
-        f"Detected OS:     {plan.os_info.summary()}",
-        f"Compatibility:   {'✅' if plan.is_compatible else '❌'} {plan.compatibility_message}",
-        f"Trust Status:    {plan.trust_status}",
+def format_full_view(plan: InstallationPlan, use_color: Optional[bool] = None) -> str:
+    """Format human-readable instructions with distinguished visual sections and boxed commands.
+
+    Args:
+        plan: Structured installation plan.
+        use_color: Optional override for ANSI color styling. If None, checks TTY.
+
+    Returns:
+        Formatted multi-line text with boxes and styled sections.
+    """
+    color = should_use_color(use_color)
+
+    rst = Style.RESET if color else ""
+    bold = Style.BOLD if color else ""
+    cyan = Style.CYAN if color else ""
+    b_cyan = Style.BRIGHT_CYAN if color else ""
+    b_white = Style.BRIGHT_WHITE if color else ""
+    gray = Style.GRAY if color else ""
+    green = Style.GREEN if color else ""
+    b_green = Style.BRIGHT_GREEN if color else ""
+    yellow = Style.YELLOW if color else ""
+    b_yellow = Style.BRIGHT_YELLOW if color else ""
+
+    output: List[str] = []
+
+    # 1. Overview Panel (Hero Box)
+    compat_icon = "✅" if plan.is_compatible else "❌"
+    overview_lines = [
+        f"{b_cyan}Application:{rst}    {b_white}{plan.recipe_name}{rst}",
+        f"{b_cyan}Category:{rst}       {b_white}{plan.category}{rst}",
+        f"{b_cyan}Method:{rst}         {b_white}{plan.method}{rst}",
+        f"{b_cyan}Official Docs:{rst}  {b_white}{plan.official_docs}{rst}",
+        f"{b_cyan}Detected OS:{rst}    {b_white}{plan.os_info.summary()}{rst}",
+        f"{b_cyan}Compatibility:{rst}  {compat_icon} {plan.compatibility_message}",
+        f"{b_cyan}Trust Status:{rst}   {plan.trust_status}",
     ]
+    output.append(
+        render_box(
+            overview_lines,
+            title=f"🍳 RepoKitchen — Installation Instructions: {plan.recipe_name}",
+            border_color=Style.CYAN,
+            title_color=Style.BOLD + Style.BRIGHT_WHITE,
+            use_color=color,
+            pad_vertical=True,
+        )
+    )
 
+    # 2. Safety / Trust Advisory Panel (if auto-install blocked)
     if plan.auto_install_blocked_reason:
-        output.extend([
-            "",
-            "⚠️  SAFETY / TRUST ADVISORY:",
-            f"   {plan.auto_install_blocked_reason}",
-        ])
+        output.append("")
+        advisory_lines = [
+            f"{yellow}{plan.auto_install_blocked_reason}{rst}"
+        ]
+        output.append(
+            render_box(
+                advisory_lines,
+                title="⚠️  SAFETY / TRUST ADVISORY",
+                border_color=Style.BRIGHT_YELLOW,
+                title_color=Style.BOLD + Style.BRIGHT_YELLOW,
+                use_color=color,
+                pad_vertical=True,
+            )
+        )
 
-    output.extend(["", sub_sep, "📋 STEP-BY-STEP BREAKDOWN", sub_sep])
+    # 3. Step-by-Step Breakdown Section
+    sep = "═" * 78
+    output.append("")
+    output.append(f"{cyan}{sep}{rst}")
+    output.append(f"  {bold}{b_cyan}📋 STEP-BY-STEP BREAKDOWN{rst}")
+    output.append(f"{cyan}{sep}{rst}")
 
     for step in plan.steps:
-        output.append(f"\nStep {step.step_num}: {step.title}")
+        output.append("")
+        output.append(f"{bold}{b_cyan}▶ Step {step.step_num} of {len(plan.steps)}: {step.title}{rst}")
         output.append(f"  {step.description}")
         for note in step.notes:
-            output.append(f"  ℹ️  {note}")
-        output.append("  Commands:")
-        for cmd in step.commands:
-            output.append(f"    $ {cmd}")
+            output.append(f"  {yellow}ℹ️  Note: {note}{rst}")
 
-    output.extend([
-        "",
-        sub_sep,
-        "📋 COPY-PASTE INSTALLATION SCRIPT",
-        "   (Copy and run the commands below in your terminal)",
-        sub_sep,
-        "",
-        format_copy_paste_script(plan),
-    ])
+        # Render commands inside a dedicated, highlighted box
+        cmd_lines = [f"{gray}${rst} {b_white}{cmd}{rst}" for cmd in step.commands]
+        output.append(
+            render_box(
+                cmd_lines,
+                title=f"Commands to run (Step {step.step_num})",
+                border_color=Style.BLUE,
+                title_color=Style.BOLD + Style.BRIGHT_CYAN,
+                use_color=color,
+            )
+        )
 
+    # 4. Copy-Paste Script Block
+    output.append("")
+    output.append(f"{cyan}{sep}{rst}")
+    output.append(f"  {bold}{b_cyan}📋 COPY-PASTE INSTALLATION SCRIPT{rst}")
+    output.append(f"  {gray}(Copy and run the complete script block below in your terminal){rst}")
+    output.append(f"{cyan}{sep}{rst}")
+    output.append("")
+
+    raw_script = format_copy_paste_script(plan)
+    styled_script_lines = []
+    for s_line in raw_script.splitlines():
+        if s_line.startswith("#"):
+            styled_script_lines.append(f"{gray}{s_line}{rst}")
+        elif s_line.startswith("sudo ") or s_line.startswith("curl ") or s_line.startswith("gpg ") or s_line.startswith("set "):
+            styled_script_lines.append(f"{b_green}{s_line}{rst}")
+        else:
+            styled_script_lines.append(f"{b_white}{s_line}{rst}")
+
+    output.append(
+        render_box(
+            styled_script_lines,
+            title="Complete Bash Script (Copy & Paste)",
+            border_color=Style.BRIGHT_CYAN,
+            title_color=Style.BOLD + Style.BRIGHT_WHITE,
+            use_color=color,
+        )
+    )
+
+    # 5. Post-Install Notes Section
     if plan.post_install_notes:
-        output.extend([
-            "",
-            sub_sep,
-            "📌 POST-INSTALL NOTES",
-            sub_sep,
-        ])
-        for note in plan.post_install_notes:
-            output.append(f"• {note}")
+        output.append("")
+        post_lines = [f"• {note}" for note in plan.post_install_notes]
+        output.append(
+            render_box(
+                post_lines,
+                title="📌 POST-INSTALL NOTES",
+                border_color=Style.MAGENTA,
+                title_color=Style.BOLD + Style.BRIGHT_MAGENTA,
+                use_color=color,
+                pad_vertical=True,
+            )
+        )
 
+    # 6. Revert / Undo Changes Section
     if plan.undo_commands:
-        output.extend([
-            "",
-            sub_sep,
-            "🔄 HOW TO UNDO THESE CHANGES",
-            sub_sep,
-        ])
-        for ucmd in plan.undo_commands:
-            output.append(f"  $ {ucmd}")
+        output.append("")
+        undo_lines = [f"{gray}${rst} {b_white}{ucmd}{rst}" for ucmd in plan.undo_commands]
+        output.append(
+            render_box(
+                undo_lines,
+                title="🔄 HOW TO UNDO THESE CHANGES",
+                border_color=Style.YELLOW,
+                title_color=Style.BOLD + Style.BRIGHT_YELLOW,
+                use_color=color,
+            )
+        )
 
-    output.append(sep)
     return "\n".join(output)
