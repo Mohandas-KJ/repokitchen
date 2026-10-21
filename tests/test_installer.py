@@ -150,6 +150,12 @@ class TestInstaller(unittest.TestCase):
         ssh_changes = [c for c in result.changes_made if "passwordless SSH" in c]
         self.assertGreater(len(ssh_changes), 0)
 
+        # Check core-site.xml and hdfs-site.xml changes
+        xml_changes = [c for c in result.changes_made if "core-site.xml" in c]
+        self.assertGreater(len(xml_changes), 0)
+        hdfs_xml_changes = [c for c in result.changes_made if "hdfs-site.xml" in c]
+        self.assertGreater(len(hdfs_xml_changes), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

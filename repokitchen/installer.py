@@ -11,6 +11,7 @@ import getpass
 import grp
 import os
 import pwd
+import re
 import shutil
 import socket
 import subprocess
@@ -531,6 +532,8 @@ class Installer:
             # Configure environment profile
             if env_file:
                 java_home = detect_java_home()
+                if Path("/usr/lib/jvm/java-21-openjdk-amd64").is_dir():
+                    java_home = "/usr/lib/jvm/java-21-openjdk-amd64"
                 print(f"  ☕ Configuring JAVA_HOME: {java_home}")
                 env_content = (
                     f"export JAVA_HOME={java_home}\n"
@@ -553,15 +556,19 @@ class Installer:
                 try:
                     if hadoop_env_file.exists():
                         content = hadoop_env_file.read_text(encoding="utf-8")
-                        if "export JAVA_HOME=" in content:
+                        if re.search(r"^#?\s*export JAVA_HOME=", content, re.MULTILINE):
                             new_content = re.sub(
-                                r"#?\s*export JAVA_HOME=.*",
+                                r"^#?\s*export JAVA_HOME=.*",
                                 f"export JAVA_HOME={java_home}",
                                 content,
                                 count=1,
+                                flags=re.MULTILINE,
                             )
                         else:
                             new_content = content + f"\nexport JAVA_HOME={java_home}\n"
+
+                        if f"export JAVA_HOME={java_home}" not in new_content:
+                            new_content += f"\nexport JAVA_HOME={java_home}\n"
 
                         with tempfile.NamedTemporaryFile("w", delete=False) as tmp_h_env:
                             tmp_h_env.write(new_content)
@@ -584,6 +591,73 @@ class Installer:
                     f"Configuring JAVA_HOME in {hadoop_env_file}",
                 )
                 changes_made.append(f"Configured JAVA_HOME in {hadoop_env_file}")
+
+            # Configure Hadoop core-site.xml and hdfs-site.xml for single-node HDFS networking
+            core_site_file = Path(extracted_dir) / "etc" / "hadoop" / "core-site.xml"
+            hdfs_site_file = Path(extracted_dir) / "etc" / "hadoop" / "hdfs-site.xml"
+
+            core_site_content = (
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>\n'
+                '<configuration>\n'
+                '    <property>\n'
+                '        <name>fs.defaultFS</name>\n'
+                '        <value>hdfs://localhost:9000</value>\n'
+                '    </property>\n'
+                '</configuration>\n'
+            )
+
+            hdfs_site_content = (
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>\n'
+                '<configuration>\n'
+                '    <property>\n'
+                '        <name>dfs.replication</name>\n'
+                '        <value>1</value>\n'
+                '    </property>\n'
+                '</configuration>\n'
+            )
+
+            print(f"\n⚙️  Configuring Hadoop HDFS cluster XML configs in {core_site_file} and {hdfs_site_file}...")
+            if not self.dry_run:
+                try:
+                    with tempfile.NamedTemporaryFile("w", delete=False) as tmp_core:
+                        tmp_core.write(core_site_content)
+                        tmp_core_path = tmp_core.name
+                    with tempfile.NamedTemporaryFile("w", delete=False) as tmp_hdfs:
+                        tmp_hdfs.write(hdfs_site_content)
+                        tmp_hdfs_path = tmp_hdfs.name
+
+                    try:
+                        self.execute_command(
+                            ["install", "-m", "0644", tmp_core_path, str(core_site_file)],
+                            f"Configuring fs.defaultFS=hdfs://localhost:9000 in {core_site_file}",
+                        )
+                        changes_made.append("Configured core-site.xml (fs.defaultFS=hdfs://localhost:9000)")
+
+                        self.execute_command(
+                            ["install", "-m", "0644", tmp_hdfs_path, str(hdfs_site_file)],
+                            f"Configuring dfs.replication=1 in {hdfs_site_file}",
+                        )
+                        changes_made.append("Configured hdfs-site.xml (dfs.replication=1)")
+                    finally:
+                        if os.path.exists(tmp_core_path):
+                            os.remove(tmp_core_path)
+                        if os.path.exists(tmp_hdfs_path):
+                            os.remove(tmp_hdfs_path)
+                except Exception as err:
+                    print(f"  ⚠️ Warning: Could not update Hadoop XML configuration: {err}")
+            else:
+                self.execute_command(
+                    ["install", "-m", "0644", "/tmp/simulated_core_site.xml", str(core_site_file)],
+                    f"Configuring fs.defaultFS=hdfs://localhost:9000 in {core_site_file}",
+                )
+                changes_made.append("Configured core-site.xml (fs.defaultFS=hdfs://localhost:9000)")
+                self.execute_command(
+                    ["install", "-m", "0644", "/tmp/simulated_hdfs_site.xml", str(hdfs_site_file)],
+                    f"Configuring dfs.replication=1 in {hdfs_site_file}",
+                )
+                changes_made.append("Configured hdfs-site.xml (dfs.replication=1)")
 
             # Configure ~/.bashrc for immediate interactive terminal access
             target_bashrcs = [Path.home() / ".bashrc"]
@@ -723,10 +797,14 @@ class Installer:
                 changes_made.append(f"Configured passwordless SSH for {target_user}")
 
             plan.post_install_notes.extend([
-                "IMPORTANT: Run Hadoop commands (start-dfs.sh, start-yarn.sh) as your normal user. NEVER run them with sudo!",
+                "Configured 'fs.defaultFS' to 'hdfs://localhost:9000' in core-site.xml to avoid NameNode 'file:///' error.",
+                "Configured 'dfs.replication' to '1' in hdfs-site.xml for single-node operation.",
+                f"Configured 'export JAVA_HOME={java_home}' in {hadoop_env_file}.",
+                "IMPORTANT: Run Hadoop commands as your normal user. NEVER run them with sudo!",
                 "Run 'source ~/.bashrc' or open a new terminal session before starting daemons.",
-                "First-time setup: Initialize HDFS by running 'hdfs namenode -format'.",
-                "Start cluster: Run 'start-dfs.sh' to start HDFS, and 'start-yarn.sh' to start YARN.",
+                "First-time setup / clean format: Wipe old temp data and format NameNode with 'rm -rf /tmp/hadoop-* && hdfs namenode -format'.",
+                "Start cluster: Run 'start-all.sh' (or 'start-dfs.sh' and 'start-yarn.sh').",
+                "Stop cluster: Run 'stop-all.sh' (or 'stop-dfs.sh' and 'stop-yarn.sh').",
                 "Verify cluster: Run 'jps' to confirm NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager are running.",
                 f"Logs are stored in {logs_dir} with {target_user} write permissions.",
             ])

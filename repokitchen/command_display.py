@@ -420,9 +420,9 @@ def build_installation_plan(
                     title="Configure Environment Profile and JAVA_HOME",
                     description=f"Configure JAVA_HOME in {hadoop_env_file}, {env_file}, and ~/.bashrc.",
                     commands=[
-                        "JAVA_BIN=$(readlink -f $(which java))",
-                        "JAVA_HOME_DIR=$(dirname $(dirname $JAVA_BIN))",
-                        f"echo \"export JAVA_HOME=$JAVA_HOME_DIR\" | sudo tee -a {hadoop_env_file} > /dev/null",
+                        'if [ -d "/usr/lib/jvm/java-21-openjdk-amd64" ]; then JAVA_HOME_DIR="/usr/lib/jvm/java-21-openjdk-amd64"; else JAVA_BIN=$(readlink -f $(which java) 2>/dev/null || true); JAVA_HOME_DIR=$(dirname $(dirname "$JAVA_BIN") 2>/dev/null || true); [ -n "$JAVA_HOME_DIR" ] && [ -d "$JAVA_HOME_DIR" ] || JAVA_HOME_DIR="/usr/lib/jvm/java-21-openjdk-amd64"; fi',
+                        f"sudo sed -i 's|^#\\?\\s*export JAVA_HOME=.*|export JAVA_HOME='\"$JAVA_HOME_DIR\"'|' {hadoop_env_file}",
+                        f"grep -q 'export JAVA_HOME=' {hadoop_env_file} || echo \"export JAVA_HOME=$JAVA_HOME_DIR\" | sudo tee -a {hadoop_env_file} > /dev/null",
                         f"echo \"export JAVA_HOME=$JAVA_HOME_DIR\" | sudo tee {env_file} > /dev/null",
                         f"echo 'export HADOOP_HOME={extracted_dir}' | sudo tee -a {env_file} > /dev/null",
                         f"echo 'export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$JAVA_HOME/bin' | sudo tee -a {env_file} > /dev/null",
@@ -431,8 +431,8 @@ def build_installation_plan(
                         "source ~/.bashrc",
                     ],
                     notes=[
-                        "Automatically detects JAVA_HOME using 'readlink -f $(which java)' and stripping '/bin/java'.",
-                        f"Configures JAVA_HOME in {hadoop_env_file} so that 'start-dfs.sh' and Hadoop daemons find Java without error.",
+                        "Automatically detects and sets JAVA_HOME (preferring /usr/lib/jvm/java-21-openjdk-amd64).",
+                        f"Configures export JAVA_HOME directly in {hadoop_env_file} so Hadoop daemons and subshells execute properly.",
                         "Configures ~/.bashrc and sources it so Hadoop commands are immediately active in your current shell.",
                     ],
                 )
@@ -441,7 +441,27 @@ def build_installation_plan(
             undo_commands.append(f"sudo rm -f {env_file}")
 
         if app_id == "hadoop":
-            # Step 6: Log directory permissions
+            # Step 6: Configure core-site.xml and hdfs-site.xml
+            core_site_path = f"{extracted_dir}/etc/hadoop/core-site.xml"
+            hdfs_site_path = f"{extracted_dir}/etc/hadoop/hdfs-site.xml"
+            steps.append(
+                CommandStep(
+                    step_num=step_num,
+                    title="Configure Hadoop Cluster Endpoints (core-site.xml and hdfs-site.xml)",
+                    description="Set fs.defaultFS to hdfs://localhost:9000 and dfs.replication to 1 for single-node cluster.",
+                    commands=[
+                        f"printf '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<configuration>\\n    <property>\\n        <name>fs.defaultFS</name>\\n        <value>hdfs://localhost:9000</value>\\n    </property>\\n</configuration>\\n' | sudo tee {core_site_path} > /dev/null",
+                        f"printf '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<configuration>\\n    <property>\\n        <name>dfs.replication</name>\\n        <value>1</value>\\n    </property>\\n</configuration>\\n' | sudo tee {hdfs_site_path} > /dev/null",
+                    ],
+                    notes=[
+                        "Configures fs.defaultFS=hdfs://localhost:9000 in core-site.xml to avoid 'Invalid URI for NameNode address (file:///)' error.",
+                        "Configures dfs.replication=1 in hdfs-site.xml for pseudo-distributed single-node cluster operation.",
+                    ],
+                )
+            )
+            step_num += 1
+
+            # Step 7: Log directory permissions
             logs_dir = f"{extracted_dir}/logs"
             steps.append(
                 CommandStep(
@@ -460,7 +480,7 @@ def build_installation_plan(
             )
             step_num += 1
 
-            # Step 7: Passwordless SSH configuration
+            # Step 8: Passwordless SSH configuration
             steps.append(
                 CommandStep(
                     step_num=step_num,
@@ -486,30 +506,38 @@ def build_installation_plan(
             )
             step_num += 1
 
-            # Step 8: Test SSH and Cluster Verification
+            # Step 9: Format NameNode and Start Single-Node Cluster
             steps.append(
                 CommandStep(
                     step_num=step_num,
-                    title="Verify SSH and Start Single-Node Cluster",
-                    description="Test passwordless connection and launch Hadoop services as your regular user.",
+                    title="Format NameNode and Start Single-Node Cluster",
+                    description="Clean old metadata, format the HDFS filesystem, and launch all cluster daemons.",
                     commands=[
                         "source ~/.bashrc",
                         'ssh -o BatchMode=yes localhost echo "SSH localhost verified successfully!"',
+                        "stop-all.sh 2>/dev/null || true",
+                        "rm -rf /tmp/hadoop-*",
+                        "hdfs namenode -format -force",
+                        "start-all.sh",
+                        "jps",
                     ],
                     notes=[
-                        "CRITICAL: Never run 'sudo start-dfs.sh' or 'sudo start-yarn.sh'! Always run them as your normal user.",
-                        "First-time setup: Format NameNode with 'hdfs namenode -format' before starting for the first time.",
-                        "Start daemons: 'start-dfs.sh' (HDFS) and 'start-yarn.sh' (YARN).",
-                        "Verify running daemons with: 'jps' (expect NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager).",
+                        "CRITICAL: Never run 'sudo start-all.sh' or 'sudo start-dfs.sh'! Always run them as your normal user.",
+                        "Stops running daemons, clears old corrupted filesystem metadata (/tmp/hadoop-*), formats NameNode, and boots cluster.",
+                        "Verify active daemons with: 'jps' (expect NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager).",
                     ],
                 )
             )
             step_num += 1
 
             post_install_notes.extend([
-                "IMPORTANT: Run Hadoop commands (start-dfs.sh, start-yarn.sh) as your normal user. NEVER run them with sudo!",
-                "First-time setup: Initialize HDFS by running 'hdfs namenode -format'.",
-                "Start cluster: Run 'start-dfs.sh' to start HDFS, and 'start-yarn.sh' to start YARN.",
+                "Configured 'fs.defaultFS' to 'hdfs://localhost:9000' in /opt/hadoop-3.5.0/etc/hadoop/core-site.xml.",
+                "Configured 'dfs.replication' to '1' in /opt/hadoop-3.5.0/etc/hadoop/hdfs-site.xml for single-node operation.",
+                f"Configured 'export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64' in {hadoop_env_file}.",
+                "IMPORTANT: Run Hadoop commands as your normal user. NEVER run them with sudo!",
+                "First-time setup / clean format: Wipe old temp data and format NameNode with 'rm -rf /tmp/hadoop-* && hdfs namenode -format'.",
+                "Start cluster: Run 'start-all.sh' (or 'start-dfs.sh' and 'start-yarn.sh').",
+                "Stop cluster: Run 'stop-all.sh' (or 'stop-dfs.sh' and 'stop-yarn.sh').",
                 "Verify cluster: Run 'jps' to confirm NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager are running.",
                 f"Logs are stored in {extracted_dir}/logs with regular user write permissions.",
             ])

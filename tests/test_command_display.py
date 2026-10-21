@@ -84,8 +84,13 @@ class TestCommandDisplay(unittest.TestCase):
         self.assertIn("authorized_keys", script)
         self.assertIn("/opt/hadoop-3.5.0/logs", script)
         self.assertIn('chown "$USER":"$(id -gn)"', script)
+        self.assertIn("core-site.xml", script)
+        self.assertIn("hdfs://localhost:9000", script)
+        self.assertIn("hdfs-site.xml", script)
+        self.assertIn("java-21-openjdk-amd64", script)
         self.assertTrue(any("NEVER run them with sudo" in note for note in plan.post_install_notes))
         self.assertTrue(any("hdfs namenode -format" in note for note in plan.post_install_notes))
+        self.assertTrue(any("core-site.xml" in note for note in plan.post_install_notes))
 
     def test_ansible_native_apt_package(self):
         ansible_file = self.recipes_dir / "ansible.json"
