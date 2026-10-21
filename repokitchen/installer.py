@@ -542,6 +542,79 @@ class Installer:
                 )
                 changes_made.append(f"Created environment profile: {env_file} (JAVA_HOME={java_home}, HADOOP_HOME={extracted_dir})")
 
+            # Configure Hadoop's internal hadoop-env.sh (critical for start-dfs.sh and daemons)
+            hadoop_env_file = Path(extracted_dir) / "etc" / "hadoop" / "hadoop-env.sh"
+            print(f"\n⚙️  Configuring JAVA_HOME in {hadoop_env_file}...")
+            if not self.dry_run:
+                try:
+                    if hadoop_env_file.exists():
+                        content = hadoop_env_file.read_text(encoding="utf-8")
+                        if "export JAVA_HOME=" in content:
+                            new_content = re.sub(
+                                r"#?\s*export JAVA_HOME=.*",
+                                f"export JAVA_HOME={java_home}",
+                                content,
+                                count=1,
+                            )
+                        else:
+                            new_content = content + f"\nexport JAVA_HOME={java_home}\n"
+
+                        with tempfile.NamedTemporaryFile("w", delete=False) as tmp_h_env:
+                            tmp_h_env.write(new_content)
+                            tmp_h_path = tmp_h_env.name
+
+                        try:
+                            self.execute_command(
+                                ["install", "-m", "0644", tmp_h_path, str(hadoop_env_file)],
+                                f"Configuring JAVA_HOME={java_home} in {hadoop_env_file}",
+                            )
+                            changes_made.append(f"Configured JAVA_HOME in {hadoop_env_file}")
+                        finally:
+                            if os.path.exists(tmp_h_path):
+                                os.remove(tmp_h_path)
+                except Exception as err:
+                    print(f"  ⚠️ Warning: Could not update {hadoop_env_file}: {err}")
+            else:
+                self.execute_command(
+                    ["install", "-m", "0644", "/tmp/simulated_hadoop_env.sh", str(hadoop_env_file)],
+                    f"Configuring JAVA_HOME in {hadoop_env_file}",
+                )
+                changes_made.append(f"Configured JAVA_HOME in {hadoop_env_file}")
+
+            # Configure ~/.bashrc for immediate interactive terminal access
+            target_bashrcs = [Path.home() / ".bashrc"]
+            sudo_user = os.environ.get("SUDO_USER")
+            if sudo_user:
+                sudo_bashrc = Path(f"/home/{sudo_user}") / ".bashrc"
+                if sudo_bashrc not in target_bashrcs:
+                    target_bashrcs.append(sudo_bashrc)
+
+            for b_path in target_bashrcs:
+                print(f"\n💻 Configuring user environment in {b_path}...")
+                if not self.dry_run:
+                    try:
+                        if b_path.exists():
+                            b_content = b_path.read_text(encoding="utf-8")
+                            if "HADOOP_HOME" not in b_content:
+                                bashrc_block = (
+                                    "\n# RepoKitchen Hadoop Environment\n"
+                                    f"export JAVA_HOME={java_home}\n"
+                                    f"export HADOOP_HOME={extracted_dir}\n"
+                                    "export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$JAVA_HOME/bin\n"
+                                )
+                                with b_path.open("a", encoding="utf-8") as f:
+                                    f.write(bashrc_block)
+                                changes_made.append(f"Configured Hadoop environment in {b_path}")
+                    except Exception as err:
+                        print(f"  ⚠️ Warning: Could not update {b_path}: {err}")
+                else:
+                    print(f"    [DRY-RUN] Appended Hadoop environment variables to {b_path}")
+                    changes_made.append(f"Configured Hadoop environment in {b_path}")
+
+            plan.post_install_notes.append(
+                "Run 'source ~/.bashrc' or open a new terminal session to start using Hadoop commands (such as start-dfs.sh)."
+            )
+
     def _install_native_apt(
         self,
         recipe: Dict[str, Any],

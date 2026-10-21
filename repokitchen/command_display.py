@@ -413,21 +413,27 @@ def build_installation_plan(
         undo_commands.append(f"sudo rm -rf {extracted_dir}")
 
         if env_file:
+            hadoop_env_file = f"{extracted_dir}/etc/hadoop/hadoop-env.sh"
             steps.append(
                 CommandStep(
                     step_num=step_num,
-                    title="Configure Environment Profile",
-                    description=f"Resolve JAVA_HOME from 'readlink -f $(which java)' and set up environment variables in {env_file}.",
+                    title="Configure Environment Profile and JAVA_HOME",
+                    description=f"Configure JAVA_HOME in {hadoop_env_file}, {env_file}, and ~/.bashrc.",
                     commands=[
                         "JAVA_BIN=$(readlink -f $(which java))",
                         "JAVA_HOME_DIR=$(dirname $(dirname $JAVA_BIN))",
+                        f"echo \"export JAVA_HOME=$JAVA_HOME_DIR\" | sudo tee -a {hadoop_env_file} > /dev/null",
                         f"echo \"export JAVA_HOME=$JAVA_HOME_DIR\" | sudo tee {env_file} > /dev/null",
                         f"echo 'export HADOOP_HOME={extracted_dir}' | sudo tee -a {env_file} > /dev/null",
                         f"echo 'export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$JAVA_HOME/bin' | sudo tee -a {env_file} > /dev/null",
                         f"sudo chmod 0644 {env_file}",
+                        f"grep -q 'HADOOP_HOME' ~/.bashrc || printf '\\n# Hadoop Environment\\nexport JAVA_HOME=%s\\nexport HADOOP_HOME={extracted_dir}\\nexport PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$JAVA_HOME/bin\\n' \"$JAVA_HOME_DIR\" >> ~/.bashrc",
+                        "source ~/.bashrc",
                     ],
                     notes=[
-                        "Automatically detects and configures JAVA_HOME by running 'readlink -f $(which java)' and removing '/bin/java'.",
+                        "Automatically detects JAVA_HOME using 'readlink -f $(which java)' and stripping '/bin/java'.",
+                        f"Configures JAVA_HOME in {hadoop_env_file} so that 'start-dfs.sh' and Hadoop daemons find Java without error.",
+                        "Configures ~/.bashrc and sources it so Hadoop commands are immediately active in your current shell.",
                     ],
                 )
             )
