@@ -440,6 +440,80 @@ def build_installation_plan(
             step_num += 1
             undo_commands.append(f"sudo rm -f {env_file}")
 
+        if app_id == "hadoop":
+            # Step 6: Log directory permissions
+            logs_dir = f"{extracted_dir}/logs"
+            steps.append(
+                CommandStep(
+                    step_num=step_num,
+                    title="Configure Hadoop Log Directory Permissions",
+                    description=f"Create {logs_dir} and assign ownership to your regular user account.",
+                    commands=[
+                        f"sudo mkdir -p {logs_dir}",
+                        f'sudo chown "$USER":"$(id -gn)" {logs_dir}',
+                    ],
+                    notes=[
+                        f"Hadoop startup scripts run as your regular user and require write access to {logs_dir}.",
+                        "Assigning ownership specifically to the logs directory preserves root security across the rest of the installation.",
+                    ],
+                )
+            )
+            step_num += 1
+
+            # Step 7: Passwordless SSH configuration
+            steps.append(
+                CommandStep(
+                    step_num=step_num,
+                    title="Configure Passwordless SSH for Hadoop Daemons",
+                    description="Install OpenSSH server and authorize your user key for localhost and VM hostname.",
+                    commands=[
+                        "sudo apt-get install -y openssh-server",
+                        "sudo systemctl enable --now ssh",
+                        "mkdir -p ~/.ssh",
+                        '[ -f ~/.ssh/id_rsa ] || ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa',
+                        "touch ~/.ssh/authorized_keys",
+                        'grep -q -F "$(cat ~/.ssh/id_rsa.pub 2>/dev/null)" ~/.ssh/authorized_keys 2>/dev/null || cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys',
+                        "chmod 700 ~/.ssh",
+                        "chmod 600 ~/.ssh/authorized_keys",
+                        "ssh-keyscan -H localhost $(hostname) >> ~/.ssh/known_hosts 2>/dev/null || true",
+                    ],
+                    notes=[
+                        "Hadoop's 'start-dfs.sh' and 'start-yarn.sh' use SSH to start daemons on localhost and the machine hostname.",
+                        "Passwordless SSH enables cluster daemons to start without pausing for password authentication.",
+                        "Keyscan populates known_hosts to prevent interactive host verification prompts during cluster startup.",
+                    ],
+                )
+            )
+            step_num += 1
+
+            # Step 8: Test SSH and Cluster Verification
+            steps.append(
+                CommandStep(
+                    step_num=step_num,
+                    title="Verify SSH and Start Single-Node Cluster",
+                    description="Test passwordless connection and launch Hadoop services as your regular user.",
+                    commands=[
+                        "source ~/.bashrc",
+                        'ssh -o BatchMode=yes localhost echo "SSH localhost verified successfully!"',
+                    ],
+                    notes=[
+                        "CRITICAL: Never run 'sudo start-dfs.sh' or 'sudo start-yarn.sh'! Always run them as your normal user.",
+                        "First-time setup: Format NameNode with 'hdfs namenode -format' before starting for the first time.",
+                        "Start daemons: 'start-dfs.sh' (HDFS) and 'start-yarn.sh' (YARN).",
+                        "Verify running daemons with: 'jps' (expect NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager).",
+                    ],
+                )
+            )
+            step_num += 1
+
+            post_install_notes.extend([
+                "IMPORTANT: Run Hadoop commands (start-dfs.sh, start-yarn.sh) as your normal user. NEVER run them with sudo!",
+                "First-time setup: Initialize HDFS by running 'hdfs namenode -format'.",
+                "Start cluster: Run 'start-dfs.sh' to start HDFS, and 'start-yarn.sh' to start YARN.",
+                "Verify cluster: Run 'jps' to confirm NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager are running.",
+                f"Logs are stored in {extracted_dir}/logs with regular user write permissions.",
+            ])
+
     elif method == "native_apt_package":
         refresh_cmd = installer.get("refresh_command", ["apt-get", "update"])
         refresh_str = " ".join(["sudo", *refresh_cmd])

@@ -7,8 +7,12 @@ confirmation prompts, and rollback/undo logging.
 
 from __future__ import annotations
 
+import getpass
+import grp
 import os
+import pwd
 import shutil
+import socket
 import subprocess
 import tempfile
 import urllib.request
@@ -611,9 +615,121 @@ class Installer:
                     print(f"    [DRY-RUN] Appended Hadoop environment variables to {b_path}")
                     changes_made.append(f"Configured Hadoop environment in {b_path}")
 
-            plan.post_install_notes.append(
-                "Run 'source ~/.bashrc' or open a new terminal session to start using Hadoop commands (such as start-dfs.sh)."
+            # Determine target non-root user and primary group for logs and SSH
+            target_user = os.environ.get("SUDO_USER") or os.environ.get("USER") or getpass.getuser()
+            try:
+                pwnam = pwd.getpwnam(target_user)
+                target_group = grp.getgrgid(pwnam.pw_gid).gr_name
+                user_home = Path(pwnam.pw_dir)
+                target_uid = pwnam.pw_uid
+                target_gid = pwnam.pw_gid
+            except KeyError:
+                target_group = target_user
+                user_home = Path.home()
+                target_uid = os.getuid()
+                target_gid = os.getgid()
+
+            # Configure Hadoop logs directory permissions
+            logs_dir = Path(extracted_dir) / "logs"
+            print(f"\n📁 Configuring Hadoop logs directory in {logs_dir}...")
+            self.execute_command(
+                ["mkdir", "-p", str(logs_dir)],
+                f"Creating Hadoop logs directory {logs_dir}",
             )
+            self.execute_command(
+                ["chown", f"{target_user}:{target_group}", str(logs_dir)],
+                f"Assigning ownership of {logs_dir} to {target_user}:{target_group}",
+            )
+            changes_made.append(f"Configured logs directory with ownership {target_user}:{target_group}: {logs_dir}")
+
+            # Configure OpenSSH and Passwordless SSH for Hadoop cluster daemons
+            print(f"\n🔑 Configuring OpenSSH and passwordless SSH for {target_user}...")
+            self.execute_command(
+                ["apt-get", "install", "-y", "openssh-server"],
+                "Installing OpenSSH server for Hadoop cluster daemons",
+            )
+            self.execute_command(
+                ["systemctl", "enable", "--now", "ssh"],
+                "Enabling and starting OpenSSH service",
+            )
+            changes_made.append("Installed and enabled OpenSSH server")
+
+            if not self.dry_run:
+                try:
+                    ssh_dir = user_home / ".ssh"
+                    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+
+                    priv_key = ssh_dir / "id_rsa"
+                    pub_key = ssh_dir / "id_rsa.pub"
+                    if not pub_key.exists():
+                        ed_pub = ssh_dir / "id_ed25519.pub"
+                        if ed_pub.exists():
+                            pub_key = ed_pub
+                        else:
+                            subprocess.run(
+                                ["ssh-keygen", "-t", "rsa", "-P", "", "-f", str(priv_key)],
+                                check=True,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+
+                    if pub_key.exists():
+                        pub_content = pub_key.read_text(encoding="utf-8").strip()
+                        auth_keys = ssh_dir / "authorized_keys"
+                        existing_auth = auth_keys.read_text(encoding="utf-8") if auth_keys.exists() else ""
+                        if pub_content not in existing_auth:
+                            with auth_keys.open("a", encoding="utf-8") as f:
+                                f.write(f"\n{pub_content}\n")
+
+                        auth_keys.chmod(0o600)
+                        ssh_dir.chmod(0o700)
+
+                        if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+                            os.chown(ssh_dir, target_uid, target_gid)
+                            if priv_key.exists():
+                                os.chown(priv_key, target_uid, target_gid)
+                            if pub_key.exists():
+                                os.chown(pub_key, target_uid, target_gid)
+                            if auth_keys.exists():
+                                os.chown(auth_keys, target_uid, target_gid)
+
+                    # Scan localhost and hostname to known_hosts to avoid prompt on start-dfs.sh
+                    try:
+                        hostname = socket.gethostname()
+                        known_hosts = ssh_dir / "known_hosts"
+                        res = subprocess.run(
+                            ["ssh-keyscan", "-H", "localhost", hostname],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if res.returncode == 0 and res.stdout.strip():
+                            existing_known = known_hosts.read_text(encoding="utf-8") if known_hosts.exists() else ""
+                            new_entries = [line for line in res.stdout.splitlines() if line.strip() and line not in existing_known]
+                            if new_entries:
+                                with known_hosts.open("a", encoding="utf-8") as f:
+                                    f.write("\n" + "\n".join(new_entries) + "\n")
+                            known_hosts.chmod(0o644)
+                            if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+                                os.chown(known_hosts, target_uid, target_gid)
+                    except Exception:
+                        pass
+
+                    changes_made.append(f"Configured passwordless SSH keys and authorized_keys for {target_user}")
+                except Exception as ssh_err:
+                    print(f"  ⚠️ Warning: Could not configure passwordless SSH: {ssh_err}")
+            else:
+                print(f"    [DRY-RUN] Configured passwordless SSH for {target_user}")
+                changes_made.append(f"Configured passwordless SSH for {target_user}")
+
+            plan.post_install_notes.extend([
+                "IMPORTANT: Run Hadoop commands (start-dfs.sh, start-yarn.sh) as your normal user. NEVER run them with sudo!",
+                "Run 'source ~/.bashrc' or open a new terminal session before starting daemons.",
+                "First-time setup: Initialize HDFS by running 'hdfs namenode -format'.",
+                "Start cluster: Run 'start-dfs.sh' to start HDFS, and 'start-yarn.sh' to start YARN.",
+                "Verify cluster: Run 'jps' to confirm NameNode, DataNode, SecondaryNameNode, ResourceManager, NodeManager are running.",
+                f"Logs are stored in {logs_dir} with {target_user} write permissions.",
+            ])
 
     def _install_native_apt(
         self,

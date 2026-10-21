@@ -144,6 +144,12 @@ class TestInstaller(unittest.TestCase):
         self.assertGreater(len(env_changes), 0)
         self.assertIn("HADOOP_HOME=", env_changes[0])
 
+        # Check logs directory and SSH changes
+        log_changes = [c for c in result.changes_made if "logs directory" in c]
+        self.assertGreater(len(log_changes), 0)
+        ssh_changes = [c for c in result.changes_made if "passwordless SSH" in c]
+        self.assertGreater(len(ssh_changes), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
