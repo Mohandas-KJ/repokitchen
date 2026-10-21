@@ -119,6 +119,49 @@ def re_clean_fingerprint(fp: str) -> str:
     return "".join(fp.split()).upper()
 
 
+def detect_java_home() -> str:
+    """Detect Java home directory using `readlink -f $(which java)`, stripping `/bin/java`.
+
+    Inspects the actual binary location resolved through system alternatives.
+    """
+    java_bin = shutil.which("java")
+    if java_bin:
+        try:
+            proc = subprocess.run(
+                ["readlink", "-f", java_bin],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            real_bin = proc.stdout.strip()
+            # If path ends with /bin/java, extract parent directory of /bin
+            if real_bin.endswith("/bin/java"):
+                return str(Path(real_bin).parent.parent)
+            elif "/bin/" in real_bin:
+                return str(Path(real_bin).parent.parent)
+        except Exception:
+            pass
+
+        try:
+            resolved = Path(java_bin).resolve()
+            if resolved.name == "java" and resolved.parent.name == "bin":
+                return str(resolved.parent.parent)
+        except Exception:
+            pass
+
+    # Standard distribution fallback paths on Debian/Ubuntu
+    for candidate in [
+        "/usr/lib/jvm/java-21-openjdk-amd64",
+        "/usr/lib/jvm/java-21-openjdk-arm64",
+        "/usr/lib/jvm/java-21-openjdk",
+        "/usr/lib/jvm/default-java",
+    ]:
+        if Path(candidate).is_dir():
+            return candidate
+
+    return "/usr/lib/jvm/java-21-openjdk-amd64"
+
+
 class Installer:
     """Executes validated installation plans with privilege management and safety gates."""
 
@@ -483,18 +526,21 @@ class Installer:
 
             # Configure environment profile
             if env_file:
+                java_home = detect_java_home()
+                print(f"  ☕ Configuring JAVA_HOME: {java_home}")
                 env_content = (
+                    f"export JAVA_HOME={java_home}\n"
                     f"export HADOOP_HOME={extracted_dir}\n"
-                    f"export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin\n"
+                    f"export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$JAVA_HOME/bin\n"
                 )
                 tmp_env = tmp_path / "env.sh"
                 tmp_env.write_text(env_content)
 
                 self.execute_command(
                     ["install", "-m", "0644", str(tmp_env if not self.dry_run else "/tmp/env.sh"), env_file],
-                    f"Configuring system environment in {env_file}",
+                    f"Configuring system environment with JAVA_HOME and HADOOP_HOME in {env_file}",
                 )
-                changes_made.append(f"Created environment profile: {env_file}")
+                changes_made.append(f"Created environment profile: {env_file} (JAVA_HOME={java_home}, HADOOP_HOME={extracted_dir})")
 
     def _install_native_apt(
         self,

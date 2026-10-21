@@ -78,6 +78,8 @@ class TestCommandDisplay(unittest.TestCase):
         self.assertIn("sha512sum -c", script)
         self.assertIn("tar -xzf", script)
         self.assertIn("HADOOP_HOME", script)
+        self.assertIn("JAVA_HOME", script)
+        self.assertIn("readlink -f $(which java)", script)
 
     def test_ansible_native_apt_package(self):
         ansible_file = self.recipes_dir / "ansible.json"

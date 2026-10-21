@@ -417,11 +417,17 @@ def build_installation_plan(
                 CommandStep(
                     step_num=step_num,
                     title="Configure Environment Profile",
-                    description=f"Set up environment variables in {env_file}.",
+                    description=f"Resolve JAVA_HOME from 'readlink -f $(which java)' and set up environment variables in {env_file}.",
                     commands=[
-                        f"echo 'export HADOOP_HOME={extracted_dir}' | sudo tee {env_file} > /dev/null",
-                        f"echo 'export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin' | sudo tee -a {env_file} > /dev/null",
+                        "JAVA_BIN=$(readlink -f $(which java))",
+                        "JAVA_HOME_DIR=$(dirname $(dirname $JAVA_BIN))",
+                        f"echo \"export JAVA_HOME=$JAVA_HOME_DIR\" | sudo tee {env_file} > /dev/null",
+                        f"echo 'export HADOOP_HOME={extracted_dir}' | sudo tee -a {env_file} > /dev/null",
+                        f"echo 'export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$JAVA_HOME/bin' | sudo tee -a {env_file} > /dev/null",
                         f"sudo chmod 0644 {env_file}",
+                    ],
+                    notes=[
+                        "Automatically detects and configures JAVA_HOME by running 'readlink -f $(which java)' and removing '/bin/java'.",
                     ],
                 )
             )

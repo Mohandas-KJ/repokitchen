@@ -10,6 +10,7 @@ from repokitchen.installer import (
     InstallationError,
     Installer,
     SecurityVerificationError,
+    detect_java_home,
     re_clean_fingerprint,
     verify_key_fingerprint,
 )
@@ -115,6 +116,33 @@ class TestInstaller(unittest.TestCase):
         dirty = "  5e38 6ead   b55f 0150  "
         clean = re_clean_fingerprint(dirty)
         self.assertEqual(clean, "5E386EADB55F0150")
+
+    @patch("shutil.which")
+    @patch("subprocess.run")
+    def test_detect_java_home_strips_bin_java(self, mock_run, mock_which):
+        mock_which.return_value = "/usr/bin/java"
+        mock_proc = MagicMock()
+        mock_proc.stdout = "/usr/lib/jvm/java-21-openjdk-amd64/bin/java\n"
+        mock_run.return_value = mock_proc
+
+        java_home = detect_java_home()
+        self.assertEqual(java_home, "/usr/lib/jvm/java-21-openjdk-amd64")
+        self.assertFalse(java_home.endswith("bin/java"))
+
+    def test_hadoop_dry_run_configures_java_home(self):
+        recipe = load_recipe(self.recipes_dir / "hadoop.json")
+        installer = Installer(dry_run=True)
+        result = installer.install(
+            recipe,
+            self.os_noble,
+            confirm_callback=lambda plan: True,
+        )
+
+        self.assertTrue(result.success)
+        # Check that changes_made mentions JAVA_HOME
+        env_changes = [c for c in result.changes_made if "JAVA_HOME=" in c]
+        self.assertGreater(len(env_changes), 0)
+        self.assertIn("HADOOP_HOME=", env_changes[0])
 
 
 if __name__ == "__main__":
